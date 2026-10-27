@@ -1,0 +1,14 @@
+{
+  "name": "DariaKhomichenko4lab",
+  "version": "1.0.0",
+  "description": "HTTP server for Lab 4 Variant 8",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node main.js",
+    "dev": "node --watch main.js"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
+  }
+}
