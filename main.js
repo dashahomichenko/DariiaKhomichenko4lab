@@ -2,113 +2,146 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { program } from 'commander';
 
+// Налаштування опцій командного рядка (усуваємо конфлікт -h)
 program
-  .helpOption('--help', 'Вивести довідку')
-  .requiredOption('-i, --input <path>', 'шлях до файлу даних')
-  .requiredOption('-h, --host <address>', 'адреса сервера')
+  .helpOption('--help', 'Показати довідку')
+  .requiredOption('-i, --input <path>', 'шлях до вхідного JSON-файлу')
+  .requiredOption('-h, --host <address>', 'адреса хоста сервера')
   .requiredOption('-p, --port <number>', 'порт сервера')
-  .option('-o, --output <path>', 'файл для запису останньої відповіді');
+  .option('-o, --output <path>', 'шлях до файлу для збереження останньої відповіді');
+
+// Переклад помилок commander українською (як у нашій 3-й лабораторній)
+program.configureOutput({
+  outputError: (str, write) => {
+    if (str.includes('required option')) {
+      write('Помилка: Не вказано обовʼязкову опцію (-i, -h або -p)!\n');
+    } else if (str.includes('argument missing')) {
+      write('Помилка: Пропущено значення для опції!\n');
+    } else {
+      write(`Помилка аргументів командного рядка: ${str}`);
+    }
+  }
+});
 
 program.parse(process.argv);
-const options = program.opts();
+const opts = program.opts();
 
-const portNumber = Number(options.port);
-if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
-  console.error('Помилка: Порт має бути коректним числом!');
-  process.exit(1);
-}
-
-function sendJsonResponse(res, statusCode, payload) {
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(statusCode, {
+// Допоміжна функція для відправки JSON-відповіді з потрібним заголовком і кодом
+function replyWithJson(res, status, data) {
+  const jsonString = JSON.stringify(data, null, 2);
+  res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8'
   });
-  res.end(body);
+  res.end(jsonString);
 }
 
-fs.access(options.input, fs.constants.F_OK, (accessErr) => {
-  if (accessErr) {
+// Перевірка існування файлу через колбек fs.stat перед запуском сервера
+fs.stat(opts.input, (statErr) => {
+  if (statErr) {
     console.error('Cannot find input file');
     process.exit(1);
   }
-  fs.access(options.input, fs.constants.F_OK, (accessErr) => {
-  if (accessErr) {
-    console.error('Cannot find input file');
-    process.exit(1);
-    
-  }
 
-  const server = http.createServer((req, res) => {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host || options.host}`);
+  const appServer = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url, `http://${opts.host}:${opts.port}`);
 
-    if (parsedUrl.pathname !== '/') {
-      sendJsonResponse(res, 404, {
-        error: 'Маршрут не знайдено. Використовуйте кореневий шлях /'
+    // 1. Перевірка маршруту (дозволено лише /)
+    if (requestUrl.pathname !== '/') {
+      replyWithJson(res, 404, {
+        message: 'Помилка 404: Сторінку не знайдено. Звертайтеся за маршрутом /'
       });
       return;
     }
 
-    const showPayment = parsedUrl.searchParams.get('payment') === 'true';
-    const hasMinValue = parsedUrl.searchParams.has('min_value');
-    let minValue = null;
+    // 2. Отримання та перевірка параметрів запиту (Варіант 8)
+    const params = requestUrl.searchParams;
+    const includePayment = params.get('payment') === 'true';
+    const minValParam = params.get('min_value');
+    const isMinProvided = minValParam !== null;
+    const minLimit = isMinProvided ? Number(minValParam) : null;
 
-    if (hasMinValue) {
-      const rawMin = parsedUrl.searchParams.get('min_value');
-      minValue = Number(rawMin);
-      if (rawMin.trim() === '' || Number.isNaN(minValue)) {
-        sendJsonResponse(res, 400, {
-          error: 'Параметр min_value має бути коректним числом'
-        });
-        return;
-      }
+    if (isMinProvided && (minValParam.trim() === '' || Number.isNaN(minLimit))) {
+      replyWithJson(res, 400, {
+        message: 'Помилка 400: Параметр min_value повинен бути числом'
+      });
+      return;
     }
 
-    fs.readFile(options.input, 'utf-8', (readErr, fileData) => {
+    // 3. Асинхронне читання файлу даних на кожен запит
+    fs.readFile(opts.input, 'utf-8', (readErr, rawText) => {
       if (readErr) {
-        sendJsonResponse(res, 500, {
-          error: 'Помилка читання файлу даних на сервері'
+        replyWithJson(res, 500, {
+          message: 'Помилка 500: Не вдалося прочитати файл даних'
         });
         return;
       }
 
-      let records;
+      let bookingsList;
       try {
-        records = JSON.parse(fileData);
-        if (!Array.isArray(records)) {
-          sendJsonResponse(res, 500, {
-            error: 'Файл даних має некоректну структуру (очікується JSON-масив)'
+        bookingsList = JSON.parse(rawText);
+        if (!Array.isArray(bookingsList)) {
+          replyWithJson(res, 500, {
+            message: 'Помилка 500: Вхідні дані не є JSON-масивом'
           });
           return;
         }
       } catch {
-        sendJsonResponse(res, 500, {
-          error: 'Файл даних пошкоджено (синтаксична помилка JSON)'
+        replyWithJson(res, 500, {
+          message: 'Помилка 500: Некоректний формат JSON у файлі даних'
         });
         return;
       }
 
-      const result = [];
-      for (const item of records) {
-        if (!item || typeof item !== 'object') continue;
+      // 4. Фільтрація та формування об'єктів за допомогою .filter() і .map()
+      const processedBookings = bookingsList
+        .filter((row) => {
+          if (!row || typeof row !== 'object') return false;
+          const val =
+            row.Booking_Value === null || row.Booking_Value === undefined || row.Booking_Value === ''
+              ? 0
+              : Number(row.Booking_Value);
 
-        const rawBookingVal = item.Booking_Value;
-        const numBookingVal =
-          rawBookingVal === null || rawBookingVal === undefined || rawBookingVal === ''
-            ? 0
-            : Number(rawBookingVal);
+          if (Number.isNaN(val)) return false;
+          return isMinProvided ? val > minLimit : true;
+        })
+        .map((row) => {
+          const numVal =
+            row.Booking_Value === null || row.Booking_Value === undefined || row.Booking_Value === ''
+              ? 0
+              : Number(row.Booking_Value);
 
-        if (Number.isNaN(numBookingVal)) continue;
-        if (hasMinValue && !(numBookingVal > minValue)) continue;
+          const bookingObj = {
+            booking_id: row.Booking_ID ?? '',
+            vehicle_type: row.Vehicle_Type ?? '',
+            booking_value: numVal
+          };
 
-        const formattedItem = {
-          booking_id: item.Booking_ID ?? '',
-          vehicle_type: item.Vehicle_Type ?? '',
-          booking_value: numBookingVal
-        };
+          if (includePayment) {
+            bookingObj.payment_method = row.Payment_Method ?? '';
+          }
 
-        if (showPayment) {
-          formattedItem.payment_method = item.Payment_Method ?? '';
-        }
+          return bookingObj;
+        });
 
-        result.push(formattedItem);
+      // 5. Запис у вихідний файл (якщо задано --output) та відправка відповіді
+      if (opts.output) {
+        const outputText = JSON.stringify(processedBookings, null, 2);
+        fs.writeFile(opts.output, outputText, 'utf-8', (writeErr) => {
+          if (writeErr) {
+            replyWithJson(res, 500, {
+              message: 'Помилка 500: Не вдалося записати відповідь у вихідний файл'
+            });
+            return;
+          }
+          replyWithJson(res, 200, processedBookings);
+        });
+      } else {
+        replyWithJson(res, 200, processedBookings);
       }
+    });
+  });
+
+  appServer.listen(Number(opts.port), opts.host, () => {
+    console.log(`Сервер працює на http://${opts.host}:${opts.port}/`);
+  });
+});
