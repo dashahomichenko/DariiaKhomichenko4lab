@@ -12,3 +12,8 @@ program
 
 program.parse(process.argv);
 const options = program.opts();
+
+if (!options.input || !options.host || !options.port) {
+  console.error('Помилка: Не задано обовʼязкові параметри (--input, --host, --port)!');
+  process.exit(1);
+}
