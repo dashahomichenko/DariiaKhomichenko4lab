@@ -47,3 +47,68 @@ fs.access(options.input, fs.constants.F_OK, (accessErr) => {
       });
       return;
     }
+
+    const showPayment = parsedUrl.searchParams.get('payment') === 'true';
+    const hasMinValue = parsedUrl.searchParams.has('min_value');
+    let minValue = null;
+
+    if (hasMinValue) {
+      const rawMin = parsedUrl.searchParams.get('min_value');
+      minValue = Number(rawMin);
+      if (rawMin.trim() === '' || Number.isNaN(minValue)) {
+        sendJsonResponse(res, 400, {
+          error: 'Параметр min_value має бути коректним числом'
+        });
+        return;
+      }
+    }
+
+    fs.readFile(options.input, 'utf-8', (readErr, fileData) => {
+      if (readErr) {
+        sendJsonResponse(res, 500, {
+          error: 'Помилка читання файлу даних на сервері'
+        });
+        return;
+      }
+
+      let records;
+      try {
+        records = JSON.parse(fileData);
+        if (!Array.isArray(records)) {
+          sendJsonResponse(res, 500, {
+            error: 'Файл даних має некоректну структуру (очікується JSON-масив)'
+          });
+          return;
+        }
+      } catch {
+        sendJsonResponse(res, 500, {
+          error: 'Файл даних пошкоджено (синтаксична помилка JSON)'
+        });
+        return;
+      }
+
+      const result = [];
+      for (const item of records) {
+        if (!item || typeof item !== 'object') continue;
+
+        const rawBookingVal = item.Booking_Value;
+        const numBookingVal =
+          rawBookingVal === null || rawBookingVal === undefined || rawBookingVal === ''
+            ? 0
+            : Number(rawBookingVal);
+
+        if (Number.isNaN(numBookingVal)) continue;
+        if (hasMinValue && !(numBookingVal > minValue)) continue;
+
+        const formattedItem = {
+          booking_id: item.Booking_ID ?? '',
+          vehicle_type: item.Vehicle_Type ?? '',
+          booking_value: numBookingVal
+        };
+
+        if (showPayment) {
+          formattedItem.payment_method = item.Payment_Method ?? '';
+        }
+
+        result.push(formattedItem);
+      }
