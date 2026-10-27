@@ -12,11 +12,6 @@ program
 program.parse(process.argv);
 const options = program.opts();
 
-if (!options.input || !options.host || !options.port) {
-  console.error('Помилка: Не задано обовʼязкові параметри (--input, --host, --port)!');
-  process.exit(1);
-}
-
 const portNumber = Number(options.port);
 if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
   console.error('Помилка: Порт має бути коректним числом!');
@@ -36,3 +31,19 @@ fs.access(options.input, fs.constants.F_OK, (accessErr) => {
     console.error('Cannot find input file');
     process.exit(1);
   }
+  fs.access(options.input, fs.constants.F_OK, (accessErr) => {
+  if (accessErr) {
+    console.error('Cannot find input file');
+    process.exit(1);
+    
+  }
+
+  const server = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || options.host}`);
+
+    if (parsedUrl.pathname !== '/') {
+      sendJsonResponse(res, 404, {
+        error: 'Маршрут не знайдено. Використовуйте кореневий шлях /'
+      });
+      return;
+    }
